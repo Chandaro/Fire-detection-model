@@ -1,0 +1,4 @@
+opencv-python
+ultralytics
+esptool
+git+https://github.com/THU-MIG/yolov10.git
