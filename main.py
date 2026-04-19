@@ -12,7 +12,7 @@ model = YOLOv10(f"{os.path.dirname(os.path.abspath(__file__))}/fire.pt")
 url = "http://192.168.1.11:81/stream"
 
 
-# Đọc và hiển thị hình ảnh từ ESP32-CAM
+# stream ESP32-CAM with fire detection box
 def stream_video(url):
     bytes_stream = b""
 
