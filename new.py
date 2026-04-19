@@ -4,7 +4,7 @@ import os
 
 model = YOLO(f"{os.path.dirname(os.path.abspath(__file__))}/fire.pt")
 
-cap = cv2.VideoCapture("http://192.168.1.11/stream")
+cap = cv2.VideoCapture("http://192.168.1.11:81/stream")
 
 while True:
     ret, frame = cap.read()

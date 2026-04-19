@@ -5,10 +5,10 @@ import time
 from ultralytics import YOLO as YOLOv10
 import os
 
-# Mô hình yolov10 phát hiện lửa
+# Import model using yolo
 model = YOLOv10(f"{os.path.dirname(os.path.abspath(__file__))}/fire.pt")
 
-# Địa chỉ IP của ESP32-CAM
+# read the url where the esp32 cam run at
 url = "http://192.168.1.11:81/stream"
 
 
