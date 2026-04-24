@@ -1,70 +1,204 @@
-import cv2
-import urllib.request
-import numpy as np
+from machine import Pin, ADC, PWM, SoftI2C
 import time
-from ultralytics import YOLO as YOLOv10
-import os
+import sys
+import select
+from machine_i2c_lcd import I2cLcd
 
-# Import model using yolo
-model = YOLOv10(f"{os.path.dirname(os.path.abspath(__file__))}/fire.pt")
+# ======================
+# HARDWARE SETUP
+# ======================
+green = Pin(18, Pin.OUT)
+yellow = Pin(2, Pin.OUT)
+red = Pin(23, Pin.OUT)
+buzzer = Pin(4, Pin.OUT)
 
-# read the url where the esp32 cam run at
-url = "http://192.168.1.11:81/stream"
+relay_speed = Pin(15, Pin.OUT)
+relay_pump  = Pin(16, Pin.OUT)
 
+mq5 = ADC(Pin(33))
+mq5.atten(ADC.ATTN_11DB)
+mq5.width(ADC.WIDTH_12BIT)
 
-# stream ESP32-CAM with fire detection box
-def stream_video(url):
-    bytes_stream = b""
+servo = PWM(Pin(13), freq=50)
 
-    while True:
-        try:
-            with urllib.request.urlopen(url, timeout=10) as stream:
-                while True:
-                    bytes_stream += stream.read(1024)
-                    a = bytes_stream.find(b"\xff\xd8")  # Start of JPEG
-                    b = bytes_stream.find(b"\xff\xd9")  # End of JPEG
+i2c = SoftI2C(sda=Pin(21), scl=Pin(22), freq=400000)
+lcd = I2cLcd(i2c, 0x27, 2, 16)
 
-                    if a != -1 and b != -1:
-                        jpg = bytes_stream[a : b + 2]
-                        bytes_stream = bytes_stream[b + 2 :]
+# ======================
+# FORCE EVERYTHING OFF AT BOOT
+# ======================
+green.off()
+yellow.off()
+red.off()
+buzzer.off()
+relay_speed.off()
+relay_pump.off()
+servo.duty(40)
+print("BOOT_OK")
 
-                        img_np = np.frombuffer(jpg, dtype=np.uint8)
-                        img = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+# ======================
+# CONFIG
+# ======================
+GAS_THRESHOLD   = 3200
+current_state   = ""
+fire_detected   = False
+was_suppressing = False
+servo_aligned   = False
 
-                        if img is not None:
-                            # Fire detection
-                            results = model(img, conf=0.8, device="cpu")
-                            # Draw bounding boxes
-                            for result in results:
-                                boxes = result.boxes
-                                for box in boxes:
-                                    x1, y1, x2, y2 = box.xyxy.tolist()[0]
-                                    c = box.cls
-                                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                                    label = model.names[int(c)]
-                                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                                    cv2.putText(
-                                        img,
-                                        label,
-                                        (x1, y1 - 10),
-                                        cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.9,
-                                        (0, 255, 0),
-                                        2,
-                                    )
+# ======================
+# PUMP HELPERS
+# ======================
+def pump_on():
+    relay_speed.on()
+    time.sleep(0.1)
+    relay_pump.on()
+    print("Pump ON")
 
-                            cv2.imshow("ESP32-CAM Stream", img)
+def pump_off():
+    relay_pump.off()
+    time.sleep(0.1)
+    relay_speed.off()
+    print("Pump OFF")
 
-                        if cv2.waitKey(1) & 0xFF == ord("q"):
-                            cv2.destroyAllWindows()
-                            return
-        except urllib.error.HTTPError as e:
-            print(f"HTTP Error: {e.code} - {e.reason}")
-            time.sleep(1)
-        except Exception as e:
-            print(f"Error: {e}")
-            time.sleep(1)
+# ======================
+# SERVO HELPER
+# ======================
+def set_servo_angle(angle):
+    angle = max(0, min(180, angle))
+    duty  = int(26 + (angle / 180) * 102)
+    servo.duty(duty)
 
+# ======================
+# LCD UPDATE
+# ======================
+def set_lcd(state, line1, line2=""):
+    global current_state
+    if state != current_state:
+        lcd.clear()
+        lcd.putstr(line1)
+        lcd.move_to(0, 1)
+        lcd.putstr(line2)
+        current_state = state
 
-if __name__ == "__main__":
-    stream_video(url)
+# ======================
+# READ SERIAL COMMAND
+# non-blocking
+# ======================
+def read_command():
+    global fire_detected
+    try:
+        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+            command = sys.stdin.readline().strip()
+            if command == "FIRE":
+                fire_detected = True
+                print("CMD: FIRE received")
+            elif command == "CLEAR":
+                fire_detected = False
+                print("CMD: CLEAR received")
+    except:
+        pass
+
+# ======================
+# SAFE MODE
+# ======================
+def safe_mode():
+    global servo_aligned
+    green.on()
+    yellow.off()
+    red.off()
+    buzzer.off()
+    pump_off()
+    if servo_aligned:
+        set_servo_angle(0)
+        servo_aligned = False
+    set_lcd("safe", "SYSTEM SAFE", "No Fire/Gas")
+
+# ======================
+# SMOKE MODE
+# ======================
+def smoke_mode():
+    global servo_aligned
+    green.off()
+    yellow.on()
+    red.off()
+    set_lcd("smoke", "SMOKE DETECTED", "WARNING")
+    buzzer.on()
+    time.sleep(0.1)
+    buzzer.off()
+    if not servo_aligned:
+        set_servo_angle(90)
+        servo_aligned = True
+    pump_on()
+
+# ======================
+# FIRE MODE
+# ======================
+def fire_mode():
+    global servo_aligned
+    green.off()
+    yellow.off()
+    red.on()
+    buzzer.on()
+    set_lcd("fire", "FIRE DETECTED", "DANGER!")
+    if not servo_aligned:
+        set_servo_angle(90)
+        servo_aligned = True
+    pump_on()
+
+# ======================
+# STOP SUPPRESSION
+# ======================
+def stop_suppression():
+    global servo_aligned, was_suppressing
+    pump_off()
+    set_servo_angle(0)
+    servo_aligned   = False
+    was_suppressing = False
+    print("Suppression stopped")
+
+# ======================
+# WARM UP SENSOR
+# ======================
+print("Warming up MQ-5...")
+lcd.clear()
+lcd.putstr("Warming up...")
+lcd.move_to(0, 1)
+lcd.putstr("Please wait...")
+
+for i in range(10):
+    read_command()   # check serial during warmup
+    time.sleep(1)
+    print("Warm up: {}/10".format(i + 1))
+
+print("READY")
+lcd.clear()
+lcd.putstr("System Ready!")
+time.sleep(1)
+
+# ======================
+# MAIN LOOP
+# ======================
+while True:
+    # always read serial first
+    read_command()
+
+    gas_value = mq5.read()
+    print("GAS:{}|FIRE:{}".format(gas_value, fire_detected))
+
+    # ======================
+    # PRIORITY SYSTEM
+    # ======================
+    if fire_detected:
+        was_suppressing = True
+        fire_mode()
+
+    elif gas_value >= GAS_THRESHOLD:
+        was_suppressing = True
+        smoke_mode()
+
+    else:
+        if was_suppressing:
+            stop_suppression()
+        safe_mode()
+
+    time.sleep(0.3)
