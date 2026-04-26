@@ -13,9 +13,10 @@ def set_angle(angle):
 print("=== SERVO TEST ===")
 print("Testing 0, 45, 90, 135, 180 ...")
 
-for a in [0, 45, 90, 135, 180]:
+for a in [0, 23,45, 68, 90,45]:
     set_angle(a)
     time.sleep(1.5)
 
 print("Done. Now call set_angle(X) in REPL to test your angle.")
 print("Example: set_angle(45)")
+
