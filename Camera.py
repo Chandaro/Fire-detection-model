@@ -5,14 +5,18 @@ from ultralytics import YOLO
 # ======================
 # CONFIG
 # ======================
-ESP32_PORT    = "COM4"
-ESPCAM_STREAM = "http://192.168.1.11:81/stream"
+ESP32_PORT    = "COM3"
+ESPCAM_STREAM = "http://10.10.49.62:81/stream"
 
 # servo tracking config
 CAM_FOV      = 60   # ESP32-CAM FOV degrees
 SERVO_CENTER = 45  # your servo center angle
 SERVO_MIN    = 0    # servo left limit
 SERVO_MAX    = 90   # servo right limit
+
+# crosshair offset (pixels) — positive moves right / down
+CROSSHAIR_X  = 0   # shift vertical line left(-) or right(+)
+CROSSHAIR_Y  = -50   # shift horizontal line up(-) or down(+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model    = YOLO("{}/fire.pt".format(BASE_DIR))
@@ -120,7 +124,7 @@ def yolo_thread():
             if latest_frame is None:
                 time.sleep(0.01); continue
             frame_copy = latest_frame.copy()
-        results = model(frame_copy, conf=0.4, device="cuda", verbose=False)
+        results = model(frame_copy, conf=0.4, device="cpu", verbose=False)
         boxes   = []
         for r in results:
             for box in r.boxes:
@@ -210,8 +214,11 @@ while True:
                 (10,80),cv2.FONT_HERSHEY_SIMPLEX,0.45,(200,200,200),1)
 
     # center guide line
-    cv2.line(frame,(320,0),(320,480),(0,255,0),1)
-    cv2.putText(frame,"CENTER",(285,30),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),1)
+    cx = 320 + CROSSHAIR_X
+    cy = 240 + CROSSHAIR_Y
+    cv2.line(frame,(cx,0),(cx,480),(0,255,0),1)
+    cv2.line(frame,(0,cy),(640,cy),(0,255,0),1)
+    cv2.putText(frame,"CENTER",(cx-35,cy-8),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),1)
 
     cv2.imshow("Object Tracking Test", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):

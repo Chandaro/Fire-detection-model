@@ -25,7 +25,32 @@ i2c = SoftI2C(sda=Pin(21), scl=Pin(22), freq=400000)
 lcd = I2cLcd(i2c, 0x27, 2, 16)
 
 # ======================
-# FORCE EVERYTHING OFF AT BOOT
+# CONFIG
+# ======================
+GAS_THRESHOLD = 3200
+
+# Servo calibration (verified with servo_test.py):
+#   0 deg  = duty 26  (full left)
+#   45 deg = duty 51  (center)  <-- confirmed true center
+#   90 deg = duty 77  (full right)
+SERVO_CENTER = 45   # duty 51 — do not change
+
+current_state   = ""
+fire_detected   = False
+was_suppressing = False
+fire_angle      = SERVO_CENTER
+
+# ======================
+# SERVO
+# (defined before boot so boot can call it)
+# ======================
+def set_servo_angle(angle):
+    angle = max(0, min(90, angle))          # clamp to 0-90 range
+    duty  = int(26 + (angle / 180) * 102)  # verified formula
+    servo.duty(duty)
+
+# ======================
+# BOOT — everything off, servo to center
 # ======================
 green.off()
 yellow.off()
@@ -33,17 +58,8 @@ red.off()
 buzzer.off()
 relay_speed.off()
 relay_pump.off()
-servo.duty(40)
+set_servo_angle(SERVO_CENTER)   # duty 51 = 45 deg = center
 print("BOOT_OK")
-
-# ======================
-# CONFIG
-# ======================
-GAS_THRESHOLD   = 3200
-current_state   = ""
-fire_detected   = False
-was_suppressing = False
-servo_aligned   = False
 
 # ======================
 # PUMP HELPERS
@@ -61,14 +77,6 @@ def pump_off():
     print("Pump OFF")
 
 # ======================
-# SERVO HELPER
-# ======================
-def set_servo_angle(angle):
-    angle = max(0, min(180, angle))
-    duty  = int(26 + (angle / 180) * 102)
-    servo.duty(duty)
-
-# ======================
 # LCD UPDATE
 # ======================
 def set_lcd(state, line1, line2=""):
@@ -82,42 +90,40 @@ def set_lcd(state, line1, line2=""):
 
 # ======================
 # READ SERIAL COMMAND
-# non-blocking
 # ======================
 def read_command():
-    global fire_detected
+    global fire_detected, fire_angle
     try:
         if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
             command = sys.stdin.readline().strip()
-            if command == "FIRE":
+            if command.startswith("FIRE"):
                 fire_detected = True
-                print("CMD: FIRE received")
+                if ":" in command:
+                    fire_angle = int(command.split(":")[1])
+                print("CMD: FIRE angle={}".format(fire_angle))
             elif command == "CLEAR":
                 fire_detected = False
-                print("CMD: CLEAR received")
+                fire_angle    = SERVO_CENTER
+                print("CMD: CLEAR")
     except:
         pass
 
 # ======================
-# SAFE MODE
+# SAFE MODE — servo returns to center (45 deg)
 # ======================
 def safe_mode():
-    global servo_aligned
     green.on()
     yellow.off()
     red.off()
     buzzer.off()
     pump_off()
-    if servo_aligned:
-        set_servo_angle(0)
-        servo_aligned = False
+    set_servo_angle(SERVO_CENTER)
     set_lcd("safe", "SYSTEM SAFE", "No Fire/Gas")
 
 # ======================
-# SMOKE MODE
+# SMOKE MODE — servo stays at center (45 deg)
 # ======================
 def smoke_mode():
-    global servo_aligned
     green.off()
     yellow.on()
     red.off()
@@ -125,34 +131,28 @@ def smoke_mode():
     buzzer.on()
     time.sleep(0.1)
     buzzer.off()
-    if not servo_aligned:
-        set_servo_angle(90)
-        servo_aligned = True
+    set_servo_angle(SERVO_CENTER)
     pump_on()
 
 # ======================
-# FIRE MODE
+# FIRE MODE — servo tracks camera angle
 # ======================
-def fire_mode():
-    global servo_aligned
+def fire_mode(angle=SERVO_CENTER):
     green.off()
     yellow.off()
     red.on()
     buzzer.on()
+    set_servo_angle(angle)
     set_lcd("fire", "FIRE DETECTED", "DANGER!")
-    if not servo_aligned:
-        set_servo_angle(90)
-        servo_aligned = True
     pump_on()
 
 # ======================
-# STOP SUPPRESSION
+# STOP SUPPRESSION — servo back to center (45 deg)
 # ======================
 def stop_suppression():
-    global servo_aligned, was_suppressing
+    global was_suppressing
     pump_off()
-    set_servo_angle(0)
-    servo_aligned   = False
+    set_servo_angle(SERVO_CENTER)
     was_suppressing = False
     print("Suppression stopped")
 
@@ -166,7 +166,7 @@ lcd.move_to(0, 1)
 lcd.putstr("Please wait...")
 
 for i in range(10):
-    read_command()   # check serial during warmup
+    read_command()
     time.sleep(1)
     print("Warm up: {}/10".format(i + 1))
 
@@ -179,18 +179,14 @@ time.sleep(1)
 # MAIN LOOP
 # ======================
 while True:
-    # always read serial first
     read_command()
 
     gas_value = mq5.read()
-    print("GAS:{}|FIRE:{}".format(gas_value, fire_detected))
+    print("GAS:{}|FIRE:{}|ANGLE:{}".format(gas_value, fire_detected, fire_angle))
 
-    # ======================
-    # PRIORITY SYSTEM
-    # ======================
     if fire_detected:
         was_suppressing = True
-        fire_mode()
+        fire_mode(angle=fire_angle)
 
     elif gas_value >= GAS_THRESHOLD:
         was_suppressing = True

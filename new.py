@@ -4,7 +4,7 @@ import os
 
 model = YOLO(f"{os.path.dirname(os.path.abspath(__file__))}/fire.pt")
 
-cap = cv2.VideoCapture("http://192.168.1.11:81/stream")
+cap = cv2.VideoCapture("http://10.10.49.62:81/stream")
 
 while True:
     ret, frame = cap.read()
@@ -13,7 +13,7 @@ while True:
         break
 
     # Fire detection
-    results = model(frame, conf=0.5, device="cuda")  # use GPU
+    results = model(frame, conf=0.5, device="cpu")  # use GPU
 
     for result in results:
         for box in result.boxes:
